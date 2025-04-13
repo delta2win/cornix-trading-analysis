@@ -1,3 +1,68 @@
+#!/usr/bin/env python3
+"""
+Cornix Trading Signal Analysis Tool
+==================================
+
+This script analyzes trading signals logs from Cornix trading bot channels,
+generating statistical reports and visualizations of trading performance.
+
+Author: delta2win
+Created: 2024-09-10
+Last Modified: 2024-09-11
+Version: 1.0.0
+
+Related Resources:
+----------------
+- CryptoWelt Telegram Group:
+  https://t.me/+9WWwDamOJsk2MGI0
+- Private TradingView Strategy: 
+  [CRYPTOWELT] GG Standard V1.0
+  https://www.tradingview.com/script/2QEK8PSr-CRYPTOWELT-GG-Standard-V1-0/
+
+Description:
+-----------
+This tool reads trading signal data from CSV files organized by channel,
+analyzes the performance metrics, and generates:
+- Visual charts showing daily and monthly profit/loss
+- Win/loss distribution
+- Cumulative profit tracking
+- Detailed PDF reports with statistics and trade history
+
+Usage:
+------
+1. Ensure your trading signal data is organized in the following structure:
+   - Each channel should have its own directory called "channelname"
+   - Each channel directory should contain two CSV files:
+     * channelname-open.csv (for open trades)
+     * channelname-closed.csv (for closed trades)
+
+2. Run the script:
+   $ python cornix-stats.py
+
+3. Select a channel from the displayed list when prompted
+
+4. The script will generate:
+   - A chart image in the 'output' directory
+   - A detailed PDF report in the 'output' directory
+   - The PDF will automatically open when complete
+
+Requirements:
+------------
+- Python 3.6+
+- pandas
+- matplotlib
+- reportlab
+- numpy
+
+History:
+--------
+- 1.0.0: Initial release with basic functionality
+  - Channel selection
+  - Performance analysis
+  - Chart generation
+  - PDF report creation
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -12,13 +77,18 @@ import numpy as np
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 
+# Create output directory if it doesn't exist
+OUTPUT_DIR = 'output'
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
+
 def get_signal_channels():
     """Get list of available signal channels from CSV files"""
     channels = set()
     
     # Look for directories that might contain signal files
     for item in os.listdir('.'):
-        if os.path.isdir(item) and not item.startswith('.'):
+        if os.path.isdir(item) and not item.startswith('.') and item != OUTPUT_DIR:
             # Look for CSV files in the directory
             dir_path = os.path.join('.', item)
             for file in os.listdir(dir_path):
@@ -311,11 +381,11 @@ def analyze_channel(channel_name):
     plt.tight_layout()
     
     # Save the chart with higher quality and better padding
-    plt.savefig('cornix_stats_chart.png', dpi=300, bbox_inches='tight', facecolor='#1a1a1a')
+    plt.savefig(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart.png"), dpi=300, bbox_inches='tight', facecolor='#1a1a1a')
 
     # Create PDF report
     doc = SimpleDocTemplate(
-        f"{channel_name.lower().replace(' ', '_')}_report.pdf",
+        os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_report.pdf"),
         pagesize=letter,
         leftMargin=30,
         rightMargin=30,
@@ -437,7 +507,7 @@ def analyze_channel(channel_name):
     elements.append(Spacer(1, 20))
 
     # Add the chart image to the PDF
-    img = Image('cornix_stats_chart.png', width=552, height=620)  # Full width (612 - 60 margins) and full height (792 - 72 margins)
+    img = Image(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart.png"), width=552, height=620)  # Full width (612 - 60 margins) and full height (792 - 72 margins)
     elements.append(img)
     elements.append(Spacer(1, 20))
 
