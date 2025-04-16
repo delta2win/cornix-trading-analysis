@@ -549,6 +549,66 @@ def analyze_channel(channel_name):
     # Add page break before the actual chart image
     elements.append(PageBreak())
 
+    # Symbol summary statistics
+    elements.append(Paragraph("Symbol Performance Summary", styles['CenteredHeading2']))
+    
+    # Group by symbol and calculate statistics
+    symbol_stats = all_signals.groupby('Symbol').agg({
+        'Signal Gained Profit %': ['count', 'mean', 'sum'],
+        'Profit_Loss': ['sum']
+    }).reset_index()
+    
+    # Flatten column names
+    symbol_stats.columns = ['Symbol', 'Trade_Count', 'Avg_Profit_Percent', 'Total_Profit_Percent', 'Total_Profit_Dollars']
+    
+    # Calculate win rate for each symbol
+    symbol_win_rates = []
+    for symbol in symbol_stats['Symbol']:
+        symbol_trades = all_signals[all_signals['Symbol'] == symbol]
+        win_trades = symbol_trades[symbol_trades['Signal Gained Profit %'] > 0]
+        win_rate = len(win_trades) / len(symbol_trades) * 100 if len(symbol_trades) > 0 else 0
+        symbol_win_rates.append(win_rate)
+    
+    # Add win rate column
+    symbol_stats['Win_Rate'] = symbol_win_rates
+    
+    # Sort by total profit (descending)
+    symbol_stats = symbol_stats.sort_values('Total_Profit_Dollars', ascending=False)
+    
+    # Create symbol summary table
+    symbol_data = [['Symbol', 'Trades', 'Win Rate', 'Avg Profit %', 'Total Profit %', 'Profit/Loss ($)']]
+    for _, row in symbol_stats.iterrows():
+        symbol_data.append([
+            row['Symbol'],
+            row['Trade_Count'],
+            f"{row['Win_Rate']:.2f}%",
+            f"{row['Avg_Profit_Percent']:.2f}%",
+            f"{row['Total_Profit_Percent']:.2f}%",
+            f"${row['Total_Profit_Dollars']:.2f}"
+        ])
+
+    symbol_table = Table(symbol_data, colWidths=[80, 50, 80, 80, 80, 100])
+    symbol_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.white),  # White background for header
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),  # Black text for header
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),  # Light background for data
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),  # Black text for data
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),  # Grey grid
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    elements.append(symbol_table)
+    elements.append(Spacer(1, 20))
+
+    # Add page break before the actual chart image
+    elements.append(PageBreak())
+
     # All trades grouped by month
     elements.append(Paragraph("All Trades by Month", styles['CenteredHeading2']))
     trades_data = [['Month', 'Date', 'Symbol', 'Direction', 'Entry', 'Last Target', 'Profit %', 'Profit $']]
