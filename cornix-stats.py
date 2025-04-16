@@ -202,6 +202,65 @@ def analyze_channel(channel_name):
     # Calculate profit/loss based on $100 standard investment
     all_signals['Profit_Loss'] = all_signals['Signal Gained Profit %'] * 100 / 100
     
+    # Calculate trade start dates based on previous profitable trades with the same symbol
+    all_signals['Trade_Start_Date'] = None
+    
+    # Group by symbol to process each symbol's trades separately
+    for symbol, symbol_trades in all_signals.groupby('Symbol'):
+        # Sort trades by date
+        symbol_trades = symbol_trades.sort_values('Date')
+        
+        # For each trade, find the start date
+        for i, trade in symbol_trades.iterrows():
+            # Get all previous trades with the same symbol
+            prev_trades = symbol_trades[symbol_trades['Date'] < trade['Date']]
+            
+            # Find the most recent profitable trade
+            profitable_trades = prev_trades[prev_trades['Signal Gained Profit %'] > 0]
+            
+            if not profitable_trades.empty:
+                # Use the date of the most recent profitable trade as the start date
+                start_date = profitable_trades.iloc[-1]['Date']
+                all_signals.at[i, 'Trade_Start_Date'] = start_date
+            else:
+                # If no previous profitable trades, use the trade's own date as start date
+                all_signals.at[i, 'Trade_Start_Date'] = trade['Date']
+    
+    # Calculate concurrent trades for each day
+    all_signals['Trade_Start_Month'] = pd.to_datetime(all_signals['Trade_Start_Date']).dt.strftime('%Y-%m')
+    
+    # Create a list of all days in the date range
+    date_range = pd.date_range(start=all_signals['Date'].min(), end=all_signals['Date'].max(), freq='D')
+    
+    # Initialize a dictionary to store concurrent trades for each day
+    concurrent_trades = {}
+    
+    # For each day, count how many trades were open
+    for day in date_range:
+        day_str = day.strftime('%Y-%m-%d')
+        # Count trades that started before or on this day and closed after this day
+        open_trades = all_signals[
+            (pd.to_datetime(all_signals['Trade_Start_Date']) <= day) & 
+            (pd.to_datetime(all_signals['Date']) >= day)
+        ]
+        concurrent_trades[day_str] = len(open_trades)
+    
+    # Convert to DataFrame
+    concurrent_df = pd.DataFrame(list(concurrent_trades.items()), columns=['Day', 'Concurrent_Trades'])
+    concurrent_df['Month'] = pd.to_datetime(concurrent_df['Day']).dt.strftime('%Y-%m')
+    
+    # Calculate max concurrent trades per month
+    max_concurrent_by_month = concurrent_df.groupby('Month')['Concurrent_Trades'].max().reset_index()
+    
+    # Calculate the maximum needed margin across all months
+    max_concurrent_trades = max_concurrent_by_month['Concurrent_Trades'].max()
+    
+    # Calculate the standard trade amount (assuming $100 per trade)
+    standard_trade_amount = 100
+    
+    # Calculate the maximum needed margin
+    max_needed_margin = max_concurrent_trades * standard_trade_amount
+    
     # Group by month and calculate statistics
     monthly_stats = all_signals.groupby('Month').agg({
         'Signal Gained Profit %': ['count', 'mean', 'sum'],
@@ -222,6 +281,9 @@ def analyze_channel(channel_name):
     monthly_stats['Cumulative_Profit'] = monthly_stats['Total_Profit_Dollars'].cumsum()
     daily_stats['Cumulative_Profit'] = daily_stats['Total_Profit_Dollars'].cumsum()
     
+    # Merge max concurrent trades with monthly stats
+    monthly_stats = pd.merge(monthly_stats, max_concurrent_by_month, on='Month', how='left')
+    
     # Calculate win rate
     win_trades = all_signals[all_signals['Signal Gained Profit %'] > 0]
     loss_trades = all_signals[all_signals['Signal Gained Profit %'] < 0]
@@ -237,11 +299,11 @@ def analyze_channel(channel_name):
     profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
     
     # Create charts (now stacked vertically)
-    plt.style.use('dark_background')  # Use dark background style for charts
-    plt.figure(figsize=(15, 20), facecolor='#1a1a1a')  # Darker gray background
+    plt.style.use('dark_background')
+    plt.figure(figsize=(15, 25), facecolor='#1a1a1a')  # Darker gray background, increased height
     
     # Daily profit chart
-    plt.subplot(5, 1, 1)
+    plt.subplot(6, 1, 1)
     
     # Separate open and closed trades
     closed_daily = daily_stats.copy()
@@ -304,7 +366,7 @@ def analyze_channel(channel_name):
     plt.tight_layout()
     
     # Daily cumulative profit chart
-    plt.subplot(5, 1, 2)
+    plt.subplot(6, 1, 2)
     
     # Calculate cumulative profit for closed trades
     closed_daily_cumsum = closed_daily['Total_Profit_Dollars'].cumsum()
@@ -328,7 +390,7 @@ def analyze_channel(channel_name):
     plt.tight_layout()
     
     # Monthly profit chart
-    plt.subplot(5, 1, 3)
+    plt.subplot(6, 1, 3)
     
     # Separate open and closed trades
     closed_monthly = monthly_stats.copy()
@@ -360,8 +422,48 @@ def analyze_channel(channel_name):
     plt.legend(facecolor='#1a1a1a', edgecolor='#333333')
     plt.tight_layout()
     
+    # Monthly concurrent trades chart
+    plt.subplot(6, 1, 4)
+    
+    # Plot max concurrent trades per month
+    plt.bar(monthly_stats['Month'], monthly_stats['Concurrent_Trades'], color='#f39c12')
+    
+    # Add labels for max concurrent trades
+    for i, (month, count) in enumerate(zip(monthly_stats['Month'], monthly_stats['Concurrent_Trades'])):
+        plt.text(i, count + 0.1, f'Max: {count}', ha='center', color='white', fontsize=10)
+    
+    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
+    plt.title('Maximum Concurrent Trades per Month', fontsize=14, pad=20, color='white')
+    plt.xticks(rotation=45, color='white')
+    plt.yticks(color='white')
+    plt.grid(True, alpha=0.2)
+    plt.tight_layout()
+    
+    # Add a new chart for margin utilization
+    plt.subplot(6, 1, 5)
+    
+    # Calculate margin needed for each month
+    margin_needed = []
+    for month in monthly_stats['Month']:
+        month_max_concurrent = max_concurrent_by_month[max_concurrent_by_month['Month'] == month]['Concurrent_Trades'].iloc[0] if not max_concurrent_by_month[max_concurrent_by_month['Month'] == month].empty else 0
+        margin_needed.append(month_max_concurrent * standard_trade_amount)
+    
+    # Plot margin needed
+    plt.bar(monthly_stats['Month'], margin_needed, color='#9b59b6', alpha=0.7, label='Margin Needed')
+    
+    # Add a line for total profit
+    plt.plot(monthly_stats['Month'], monthly_stats['Total_Profit_Dollars'], color='#3498db', linewidth=2, label='Total Profit')
+    
+    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
+    plt.title('Margin Needed vs Total Profit', fontsize=14, pad=20, color='white')
+    plt.xticks(rotation=45, color='white')
+    plt.yticks(color='white')
+    plt.grid(True, alpha=0.2)
+    plt.legend(facecolor='#1a1a1a', edgecolor='#333333')
+    plt.tight_layout()
+    
     # Cumulative profit chart
-    plt.subplot(5, 1, 4)
+    plt.subplot(6, 1, 6)
     plt.plot(monthly_stats['Month'], monthly_stats['Cumulative_Profit'], color='#3498db', linewidth=2)
     plt.fill_between(monthly_stats['Month'], monthly_stats['Cumulative_Profit'], alpha=0.2, color='#3498db')
     plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
@@ -372,7 +474,7 @@ def analyze_channel(channel_name):
     plt.tight_layout()
     
     # Win/Loss distribution
-    plt.subplot(5, 1, 5)
+    plt.subplot(6, 1, 6)
     win_loss_data = [len(win_trades), len(loss_trades)]
     pie_colors = ['#2ecc71', '#e74c3c']
     plt.pie(win_loss_data, labels=['Winning Trades', 'Losing Trades'], autopct='%1.1f%%', 
@@ -444,7 +546,9 @@ def analyze_channel(channel_name):
         ["Average Loss (Losing Trades)", f"{avg_loss:.2f}%"],
         ["Profit Factor", f"{profit_factor:.2f}"],
         ["Total Profit/Loss", f"${monthly_stats['Total_Profit_Dollars'].sum():.2f}"],
-        ["Cumulative Profit/Loss", f"${monthly_stats['Cumulative_Profit'].iloc[-1]:.2f}"]
+        ["Max Concurrent Trades", f"{max_concurrent_trades}"],
+        ["Max Needed Margin", f"${max_needed_margin:.2f}"],
+        ["Return on Margin", f"{(monthly_stats['Total_Profit_Dollars'].sum() / max_needed_margin * 100):.2f}%"]
     ]
 
     summary_table = Table(summary_data, colWidths=[200, 100])
@@ -468,18 +572,42 @@ def analyze_channel(channel_name):
 
     # Monthly statistics
     elements.append(Paragraph("Monthly Statistics", styles['CenteredHeading2']))
-    monthly_data = [['Month', 'Trades', 'Avg Profit %', 'Total Profit %', 'Profit/Loss ($)', 'Cumulative Profit ($)']]
+    monthly_data = [['Month', 'Trades', 'Wins', 'Losses', 'Max Conc', 'Margin', 'Total %', 'P/L ($)', 'ROI %']]
+    
+    # Calculate wins and losses per month
     for _, row in monthly_stats.iterrows():
+        # Get the max concurrent trades for this month
+        month_max_concurrent = max_concurrent_by_month[max_concurrent_by_month['Month'] == row['Month']]['Concurrent_Trades'].iloc[0] if not max_concurrent_by_month[max_concurrent_by_month['Month'] == row['Month']].empty else 0
+        
+        # Calculate margin needed for this month
+        month_margin_needed = month_max_concurrent * standard_trade_amount
+        
+        # Calculate return on margin for this month
+        return_on_margin = (row['Total_Profit_Dollars'] / month_margin_needed * 100) if month_margin_needed > 0 else 0
+        
+        # Calculate total percentage based on margin
+        total_percent_on_margin = (row['Total_Profit_Dollars'] / month_margin_needed * 100) if month_margin_needed > 0 else 0
+        
+        # Get trades for this month
+        month_trades = all_signals[all_signals['Month'] == row['Month']]
+        
+        # Count wins and losses
+        wins = len(month_trades[month_trades['Signal Gained Profit %'] > 0])
+        losses = len(month_trades[month_trades['Signal Gained Profit %'] < 0])
+        
         monthly_data.append([
             row['Month'],
             row['Trade_Count'],
-            f"{row['Avg_Profit_Percent']:.2f}%",
-            f"{row['Total_Profit_Percent']:.2f}%",
-            f"${row['Total_Profit_Dollars']:.2f}",
-            f"${row['Cumulative_Profit']:.2f}"
+            wins,
+            losses,
+            month_max_concurrent,
+            f"${month_margin_needed:.0f}",
+            f"{total_percent_on_margin:.1f}%",
+            f"${row['Total_Profit_Dollars']:.0f}",
+            f"{return_on_margin:.1f}%"
         ])
 
-    monthly_table = Table(monthly_data, colWidths=[80, 50, 80, 80, 100, 100])
+    monthly_table = Table(monthly_data, colWidths=[70, 40, 40, 40, 50, 60, 50, 60, 50])
     monthly_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.white),  # Dark background for header
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),  # White text for header
@@ -572,8 +700,8 @@ def analyze_channel(channel_name):
     # Add win rate column
     symbol_stats['Win_Rate'] = symbol_win_rates
     
-    # Sort by total profit (descending)
-    symbol_stats = symbol_stats.sort_values('Total_Profit_Dollars', ascending=False)
+    # Sort by win rate (descending) instead of total profit
+    symbol_stats = symbol_stats.sort_values('Win_Rate', ascending=False)
     
     # Create symbol summary table
     symbol_data = [['Symbol', 'Trades', 'Win Rate', 'Avg Profit %', 'Total Profit %', 'Profit/Loss ($)']]
