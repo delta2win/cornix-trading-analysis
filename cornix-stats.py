@@ -76,6 +76,7 @@ from reportlab.lib import colors
 import numpy as np
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
+from matplotlib import patheffects
 
 # Create output directory if it doesn't exist
 OUTPUT_DIR = 'output'
@@ -267,19 +268,27 @@ def analyze_channel(channel_name):
         'Profit_Loss': ['sum']
     }).reset_index()
     
+    # Create a DataFrame with all days in the date range
+    all_days = pd.DataFrame({'Day': date_range.strftime('%Y-%m-%d')})
+    
     # Group by day for daily chart
     daily_stats = all_signals.groupby('Day').agg({
         'Signal Gained Profit %': ['count', 'mean', 'sum'],
         'Profit_Loss': ['sum']
     }).reset_index()
     
-    # Flatten column names
-    monthly_stats.columns = ['Month', 'Trade_Count', 'Avg_Profit_Percent', 'Total_Profit_Percent', 'Total_Profit_Dollars']
+    # Flatten column names before merging
     daily_stats.columns = ['Day', 'Trade_Count', 'Avg_Profit_Percent', 'Total_Profit_Percent', 'Total_Profit_Dollars']
+    
+    # Keep original daily_stats for both charts (only trading days)
+    daily_stats_trading_days = daily_stats.copy()
+    
+    # Flatten column names for monthly stats
+    monthly_stats.columns = ['Month', 'Trade_Count', 'Avg_Profit_Percent', 'Total_Profit_Percent', 'Total_Profit_Dollars']
     
     # Calculate cumulative profit
     monthly_stats['Cumulative_Profit'] = monthly_stats['Total_Profit_Dollars'].cumsum()
-    daily_stats['Cumulative_Profit'] = daily_stats['Total_Profit_Dollars'].cumsum()
+    daily_stats_trading_days['Cumulative_Profit'] = daily_stats_trading_days['Total_Profit_Dollars'].cumsum()
     
     # Merge max concurrent trades with monthly stats
     monthly_stats = pd.merge(monthly_stats, max_concurrent_by_month, on='Month', how='left')
@@ -298,15 +307,31 @@ def analyze_channel(channel_name):
     total_loss = abs(loss_trades['Signal Gained Profit %'].sum()) if len(loss_trades) > 0 else 0
     profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
     
-    # Create charts (now stacked vertically)
+    # Set modern style and color palette
     plt.style.use('dark_background')
-    plt.figure(figsize=(15, 25), facecolor='#1a1a1a')  # Darker gray background, increased height
+    modern_colors = {
+        'profit': '#00c853',       # Bright green
+        'loss': '#ff5252',         # Bright red
+        'open_profit': '#69f0ae',  # Light green
+        'open_loss': '#ff867c',    # Light red
+        'line': '#448aff',         # Bright blue
+        'fill': '#82b1ff',         # Light blue
+        'orange': '#ffd740',       # Bright orange
+        'purple': '#e040fb',       # Bright purple
+        'background': '#1a1a1a',   # Dark background
+        'grid': '#333333'          # Dark grid
+    }
     
-    # Daily profit chart
-    plt.subplot(6, 1, 1)
+    # Create two separate figures for better organization
+    # Figure 1: Daily charts
+    fig1 = plt.figure(figsize=(15, 16), facecolor=modern_colors['background'])
+    
+    # Daily profit chart (only trading days)
+    ax1 = plt.subplot(2, 1, 1)
+    ax1.set_facecolor(modern_colors['background'])
     
     # Separate open and closed trades
-    closed_daily = daily_stats.copy()
+    closed_daily = daily_stats_trading_days.copy()
     open_daily = all_signals[all_signals['Status'] == 'Open'].groupby('Day').agg({
         'Signal Gained Profit %': ['count', 'mean', 'sum'],
         'Profit_Loss': ['sum']
@@ -315,82 +340,133 @@ def analyze_channel(channel_name):
     if not open_daily.empty:
         open_daily.columns = ['Day', 'Trade_Count', 'Avg_Profit_Percent', 'Total_Profit_Percent', 'Total_Profit_Dollars']
         
-        # Plot closed trades
-        closed_colors = ['#e74c3c' if x < 0 else '#2ecc71' for x in closed_daily['Total_Profit_Dollars']]
-        closed_bars = plt.bar(closed_daily['Day'], closed_daily['Total_Profit_Dollars'], color=closed_colors, label='Closed Trades')
+        # Plot closed trades with gradient bars
+        closed_colors = [modern_colors['loss'] if x < 0 else modern_colors['profit'] for x in closed_daily['Total_Profit_Dollars']]
+        closed_bars = ax1.bar(closed_daily['Day'], closed_daily['Total_Profit_Dollars'], color=closed_colors, 
+                             label='Closed Trades', alpha=0.9, width=0.8)
         
-        # Add trade count labels on top of closed trade bars
+        # Add rounded corners to bars
+        for bar in closed_bars:
+            bar.set_path_effects([patheffects.SimplePatchShadow(offset=(2, -2), alpha=0.3),
+                                patheffects.Normal()])
+        
+        # Add trade count labels only for non-zero values
         for i, bar in enumerate(closed_bars):
             height = bar.get_height()
             count = closed_daily['Trade_Count'].iloc[i]
-            # Position the label above the bar if positive, below if negative
-            y_pos = height + 0.5 if height >= 0 else height - 0.5
-            plt.text(bar.get_x() + bar.get_width()/2., y_pos, 
-                    f'{count}', ha='center', va='bottom' if height >= 0 else 'top', 
-                    color='white', fontsize=10)
+            if count > 0:  # Only add label if there are trades
+                y_pos = height + 0.5 if height >= 0 else height - 0.5
+                ax1.text(bar.get_x() + bar.get_width()/2., y_pos, f'${height:.0f}\n({count})',
+                        ha='center', va='bottom' if height >= 0 else 'top',
+                        color='white', fontsize=8, fontweight='bold')
         
-        # Plot open trades
-        open_colors = ['#ff9999' if x < 0 else '#99ff99' for x in open_daily['Total_Profit_Dollars']]
-        open_bars = plt.bar(open_daily['Day'], open_daily['Total_Profit_Dollars'], color=open_colors, label='Open Trades')
+        # Plot open trades with gradient bars
+        open_colors = [modern_colors['open_loss'] if x < 0 else modern_colors['open_profit'] for x in open_daily['Total_Profit_Dollars']]
+        open_bars = ax1.bar(open_daily['Day'], open_daily['Total_Profit_Dollars'], color=open_colors, 
+                             label='Open Trades', alpha=0.9, width=0.8)
         
-        # Add trade count labels on top of open trade bars
+        # Add rounded corners to bars
+        for bar in open_bars:
+            bar.set_path_effects([patheffects.SimplePatchShadow(offset=(2, -2), alpha=0.3),
+                                patheffects.Normal()])
+        
+        # Add trade count labels only for non-zero values
         for i, bar in enumerate(open_bars):
             height = bar.get_height()
             count = open_daily['Trade_Count'].iloc[i]
-            # Position the label above the bar if positive, below if negative
-            y_pos = height + 0.5 if height >= 0 else height - 0.5
-            plt.text(bar.get_x() + bar.get_width()/2., y_pos, 
-                    f'{count}', ha='center', va='bottom' if height >= 0 else 'top', 
-                    color='white', fontsize=10)
+            if count > 0:  # Only add label if there are trades
+                y_pos = height + 0.5 if height >= 0 else height - 0.5
+                ax1.text(bar.get_x() + bar.get_width()/2., y_pos, f'${height:.0f}\n({count})',
+                        ha='center', va='bottom' if height >= 0 else 'top',
+                        color='white', fontsize=8, fontweight='bold')
     else:
         # If no open trades, just plot closed trades
-        closed_colors = ['#e74c3c' if x < 0 else '#2ecc71' for x in closed_daily['Total_Profit_Dollars']]
-        closed_bars = plt.bar(closed_daily['Day'], closed_daily['Total_Profit_Dollars'], color=closed_colors)
+        closed_colors = [modern_colors['loss'] if x < 0 else modern_colors['profit'] for x in closed_daily['Total_Profit_Dollars']]
+        closed_bars = ax1.bar(closed_daily['Day'], closed_daily['Total_Profit_Dollars'], color=closed_colors, 
+                             label='Closed Trades', alpha=0.9, width=0.8)
         
-        # Add trade count labels on top of closed trade bars
+        # Add rounded corners to bars
+        for bar in closed_bars:
+            bar.set_path_effects([patheffects.SimplePatchShadow(offset=(2, -2), alpha=0.3),
+                                patheffects.Normal()])
+        
+        # Add trade count labels only for non-zero values
         for i, bar in enumerate(closed_bars):
             height = bar.get_height()
             count = closed_daily['Trade_Count'].iloc[i]
-            # Position the label above the bar if positive, below if negative
-            y_pos = height + 0.5 if height >= 0 else height - 0.5
-            plt.text(bar.get_x() + bar.get_width()/2., y_pos, 
-                    f'{count}', ha='center', va='bottom' if height >= 0 else 'top', 
-                    color='white', fontsize=10)
+            if count > 0:  # Only add label if there are trades
+                y_pos = height + 0.5 if height >= 0 else height - 0.5
+                ax1.text(bar.get_x() + bar.get_width()/2., y_pos, f'${height:.0f}\n({count})',
+                        ha='center', va='bottom' if height >= 0 else 'top',
+                        color='white', fontsize=8, fontweight='bold')
     
-    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
-    plt.title('Daily Profit/Loss ($)', fontsize=14, pad=20, color='white')
-    plt.xticks(rotation=45, color='white')
-    plt.yticks(color='white')
-    plt.grid(True, alpha=0.2)
-    plt.legend(facecolor='#1a1a1a', edgecolor='#333333')
-    plt.tight_layout()
+    # Customize grid
+    ax1.grid(True, alpha=0.1, linestyle='--', color=modern_colors['grid'])
+    ax1.set_axisbelow(True)
     
-    # Daily cumulative profit chart
-    plt.subplot(6, 1, 2)
+    # Style improvements
+    ax1.set_title('Daily Profit/Loss ($)', fontsize=16, pad=20, color='white', fontweight='bold')
+    ax1.tick_params(colors='white', labelsize=10)
+    
+    # Reduce number of x-axis labels
+    num_days = len(closed_daily['Day'])
+    if num_days > 30:
+        # Show every 5th day label
+        step = max(1, num_days // 30)
+        ax1.set_xticks(ax1.get_xticks()[::step])
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha='right')
+    
+    # Add legend
+    ax1.legend(loc='upper right', facecolor=modern_colors['background'], edgecolor='white', framealpha=0.9)
+    
+    # Daily cumulative profit chart (only trading days)
+    ax2 = plt.subplot(2, 1, 2)
+    ax2.set_facecolor(modern_colors['background'])
     
     # Calculate cumulative profit for closed trades
-    closed_daily_cumsum = closed_daily['Total_Profit_Dollars'].cumsum()
+    closed_daily_cumsum = daily_stats_trading_days['Total_Profit_Dollars'].cumsum()
     
-    # Plot closed trades cumulative
-    plt.plot(closed_daily['Day'], closed_daily_cumsum, color='#3498db', linewidth=2, label='Closed Trades')
-    plt.fill_between(closed_daily['Day'], closed_daily_cumsum, alpha=0.2, color='#3498db')
+    # Plot with gradient fill
+    cumulative_line = ax2.plot(daily_stats_trading_days['Day'], closed_daily_cumsum, 
+                              color=modern_colors['line'], linewidth=2.5, label='Cumulative Profit')
     
-    # Calculate and plot open trades cumulative if they exist
-    if not open_daily.empty:
-        open_daily_cumsum = open_daily['Total_Profit_Dollars'].cumsum()
-        plt.plot(open_daily['Day'], open_daily_cumsum, color='#9b59b6', linewidth=2, linestyle='--', label='Open Trades')
-        plt.fill_between(open_daily['Day'], open_daily_cumsum, alpha=0.1, color='#9b59b6')
+    # Create gradient fill
+    gradient = np.linspace(0, 1, 100)
+    fill_colors = [(0, 0.5, 1, a) for a in gradient]
+    ax2.fill_between(daily_stats_trading_days['Day'], closed_daily_cumsum, alpha=0.3,
+                     color=modern_colors['fill'])
     
-    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
-    plt.title('Daily Cumulative Profit/Loss ($)', fontsize=14, pad=20, color='white')
-    plt.xticks(rotation=45, color='white')
-    plt.yticks(color='white')
-    plt.grid(True, alpha=0.2)
-    plt.legend(facecolor='#1a1a1a', edgecolor='#333333')
+    # Customize grid
+    ax2.grid(True, alpha=0.1, linestyle='--', color=modern_colors['grid'])
+    ax2.set_axisbelow(True)
+    
+    # Style improvements
+    ax2.set_title('Daily Cumulative Profit/Loss ($)', fontsize=16, pad=20, color='white', fontweight='bold')
+    ax2.tick_params(colors='white', labelsize=10)
+    
+    # Reduce number of x-axis labels
+    num_days = len(daily_stats_trading_days['Day'])
+    if num_days > 30:
+        # Show every 5th day label
+        step = max(1, num_days // 30)
+        ax2.set_xticks(ax2.get_xticks()[::step])
+    plt.setp(ax2.get_xticklabels(), rotation=45, ha='right')
+    
+    # Add legend
+    ax2.legend(loc='upper right', facecolor=modern_colors['background'], edgecolor='white', framealpha=0.9)
+    
     plt.tight_layout()
     
+    # Save first page
+    plt.savefig(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart_daily.png"),
+                dpi=300, bbox_inches='tight', facecolor=modern_colors['background'])
+    
+    # Figure 2: Monthly charts
+    fig2 = plt.figure(figsize=(15, 16), facecolor=modern_colors['background'])
+    
     # Monthly profit chart
-    plt.subplot(6, 1, 3)
+    ax3 = plt.subplot(2, 1, 1)
+    ax3.set_facecolor(modern_colors['background'])
     
     # Separate open and closed trades
     closed_monthly = monthly_stats.copy()
@@ -402,89 +478,98 @@ def analyze_channel(channel_name):
     if not open_monthly.empty:
         open_monthly.columns = ['Month', 'Trade_Count', 'Avg_Profit_Percent', 'Total_Profit_Percent', 'Total_Profit_Dollars']
         
-        # Plot closed trades
-        closed_colors = ['#e74c3c' if x < 0 else '#2ecc71' for x in closed_monthly['Total_Profit_Dollars']]
-        plt.bar(closed_monthly['Month'], closed_monthly['Total_Profit_Dollars'], color=closed_colors, label='Closed Trades')
+        # Plot monthly profits with gradient bars
+        monthly_colors = [modern_colors['loss'] if x < 0 else modern_colors['profit'] 
+                         for x in monthly_stats['Total_Profit_Dollars']]
+        monthly_bars = ax3.bar(monthly_stats['Month'], monthly_stats['Total_Profit_Dollars'],
+                              color=monthly_colors, alpha=0.9, width=0.8, label='Closed Trades')
         
-        # Plot open trades
-        open_colors = ['#ff9999' if x < 0 else '#99ff99' for x in open_monthly['Total_Profit_Dollars']]
-        plt.bar(open_monthly['Month'], open_monthly['Total_Profit_Dollars'], color=open_colors, label='Open Trades')
+        # Add rounded corners and shadows
+        for bar in monthly_bars:
+            bar.set_path_effects([patheffects.SimplePatchShadow(offset=(2, -2), alpha=0.3),
+                                patheffects.Normal()])
+        
+        # Customize grid
+        ax3.grid(True, alpha=0.1, linestyle='--', color=modern_colors['grid'])
+        ax3.set_axisbelow(True)
+        
+        # Style improvements
+        ax3.set_title('Monthly Profit/Loss ($)', fontsize=16, pad=20, color='white', fontweight='bold')
+        ax3.tick_params(colors='white', labelsize=10)
+        plt.setp(ax3.get_xticklabels(), rotation=45, ha='right')
+        
+        # Plot open trades with gradient bars
+        open_colors = [modern_colors['open_loss'] if x < 0 else modern_colors['open_profit'] for x in open_monthly['Total_Profit_Dollars']]
+        open_bars = ax3.bar(open_monthly['Month'], open_monthly['Total_Profit_Dollars'], color=open_colors, 
+                             label='Open Trades', alpha=0.9, width=0.8)
+        
+        # Add rounded corners to bars
+        for bar in open_bars:
+            bar.set_path_effects([patheffects.SimplePatchShadow(offset=(2, -2), alpha=0.3),
+                                patheffects.Normal()])
+        
+        # Add trade count labels
+        for i, bar in enumerate(open_bars):
+            height = bar.get_height()
+            count = open_monthly['Trade_Count'].iloc[i]
+            y_pos = height + 0.5 if height >= 0 else height - 0.5
+            ax3.text(bar.get_x() + bar.get_width()/2., y_pos, f'{count}',
+                    ha='center', va='bottom' if height >= 0 else 'top',
+                    color='white', fontsize=10, fontweight='bold')
     else:
         # If no open trades, just plot closed trades
-        closed_colors = ['#e74c3c' if x < 0 else '#2ecc71' for x in closed_monthly['Total_Profit_Dollars']]
-        plt.bar(closed_monthly['Month'], closed_monthly['Total_Profit_Dollars'], color=closed_colors)
+        closed_colors = [modern_colors['loss'] if x < 0 else modern_colors['profit'] for x in closed_monthly['Total_Profit_Dollars']]
+        closed_bars = ax3.bar(closed_monthly['Month'], closed_monthly['Total_Profit_Dollars'], color=closed_colors, 
+                             label='Closed Trades', alpha=0.9, width=0.8)
+        
+        # Add rounded corners to bars
+        for bar in closed_bars:
+            bar.set_path_effects([patheffects.SimplePatchShadow(offset=(2, -2), alpha=0.3),
+                                patheffects.Normal()])
+        
+        # Add trade count labels
+        for i, bar in enumerate(closed_bars):
+            height = bar.get_height()
+            count = closed_monthly['Trade_Count'].iloc[i]
+            y_pos = height + 0.5 if height >= 0 else height - 0.5
+            ax3.text(bar.get_x() + bar.get_width()/2., y_pos, f'{count}',
+                    ha='center', va='bottom' if height >= 0 else 'top',
+                    color='white', fontsize=10, fontweight='bold')
     
-    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
-    plt.title('Monthly Profit/Loss ($)', fontsize=14, pad=20, color='white')
-    plt.xticks(rotation=45, color='white')
-    plt.yticks(color='white')
-    plt.grid(True, alpha=0.2)
-    plt.legend(facecolor='#1a1a1a', edgecolor='#333333')
-    plt.tight_layout()
+    # Add legend to monthly profit chart
+    ax3.legend(loc='upper right', facecolor=modern_colors['background'], edgecolor='white', framealpha=0.9)
     
-    # Monthly concurrent trades chart
-    plt.subplot(6, 1, 4)
+    # Win/Loss distribution pie chart
+    ax4 = plt.subplot(2, 1, 2)
+    ax4.set_facecolor(modern_colors['background'])
     
-    # Plot max concurrent trades per month
-    plt.bar(monthly_stats['Month'], monthly_stats['Concurrent_Trades'], color='#f39c12')
-    
-    # Add labels for max concurrent trades
-    for i, (month, count) in enumerate(zip(monthly_stats['Month'], monthly_stats['Concurrent_Trades'])):
-        plt.text(i, count + 0.1, f'Max: {count}', ha='center', color='white', fontsize=10)
-    
-    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
-    plt.title('Maximum Concurrent Trades per Month', fontsize=14, pad=20, color='white')
-    plt.xticks(rotation=45, color='white')
-    plt.yticks(color='white')
-    plt.grid(True, alpha=0.2)
-    plt.tight_layout()
-    
-    # Add a new chart for margin utilization
-    plt.subplot(6, 1, 5)
-    
-    # Calculate margin needed for each month
-    margin_needed = []
-    for month in monthly_stats['Month']:
-        month_max_concurrent = max_concurrent_by_month[max_concurrent_by_month['Month'] == month]['Concurrent_Trades'].iloc[0] if not max_concurrent_by_month[max_concurrent_by_month['Month'] == month].empty else 0
-        margin_needed.append(month_max_concurrent * standard_trade_amount)
-    
-    # Plot margin needed
-    plt.bar(monthly_stats['Month'], margin_needed, color='#9b59b6', alpha=0.7, label='Margin Needed')
-    
-    # Add a line for total profit
-    plt.plot(monthly_stats['Month'], monthly_stats['Total_Profit_Dollars'], color='#3498db', linewidth=2, label='Total Profit')
-    
-    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
-    plt.title('Margin Needed vs Total Profit', fontsize=14, pad=20, color='white')
-    plt.xticks(rotation=45, color='white')
-    plt.yticks(color='white')
-    plt.grid(True, alpha=0.2)
-    plt.legend(facecolor='#1a1a1a', edgecolor='#333333')
-    plt.tight_layout()
-    
-    # Cumulative profit chart
-    plt.subplot(6, 1, 6)
-    plt.plot(monthly_stats['Month'], monthly_stats['Cumulative_Profit'], color='#3498db', linewidth=2)
-    plt.fill_between(monthly_stats['Month'], monthly_stats['Cumulative_Profit'], alpha=0.2, color='#3498db')
-    plt.axhline(y=0, color='#95a5a6', linestyle='-', alpha=0.3)
-    plt.title('Monthly Cumulative Profit/Loss ($)', fontsize=14, pad=20, color='white')
-    plt.xticks(rotation=45, color='white')
-    plt.yticks(color='white')
-    plt.grid(True, alpha=0.2)
-    plt.tight_layout()
-    
-    # Win/Loss distribution
-    plt.subplot(6, 1, 6)
+    # Create modern pie chart
     win_loss_data = [len(win_trades), len(loss_trades)]
-    pie_colors = ['#2ecc71', '#e74c3c']
-    plt.pie(win_loss_data, labels=['Winning Trades', 'Losing Trades'], autopct='%1.1f%%', 
-            colors=pie_colors, startangle=90, shadow=True)
-    plt.title('Win/Loss Distribution', fontsize=14, pad=20, color='white')
+    pie_colors = [modern_colors['profit'], modern_colors['loss']]
+    wedges, texts, autotexts = ax4.pie(win_loss_data, labels=['Winning Trades', 'Losing Trades'],
+                                      autopct='%1.1f%%', colors=pie_colors, startangle=90,
+                                      wedgeprops={'width': 0.7, 'edgecolor': 'white', 'linewidth': 2})
+    
+    # Style pie chart text
+    plt.setp(autotexts, size=12, weight="bold", color="white")
+    plt.setp(texts, size=12, color="white")
+    
+    # Add title
+    ax4.set_title('Win/Loss Distribution', fontsize=16, pad=20, color='white', fontweight='bold')
+    
+    # Add legend to pie chart
+    ax4.legend(wedges, ['Winning Trades', 'Losing Trades'],
+              loc='upper right',
+              facecolor=modern_colors['background'],
+              edgecolor='white',
+              framealpha=0.9)
+    
     plt.tight_layout()
     
-    # Save the chart with higher quality and better padding
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart.png"), dpi=300, bbox_inches='tight', facecolor='#1a1a1a')
-
+    # Save second page
+    plt.savefig(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart_monthly.png"),
+                dpi=300, bbox_inches='tight', facecolor=modern_colors['background'])
+    
     # Create PDF report
     doc = SimpleDocTemplate(
         os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_report.pdf"),
@@ -634,9 +719,11 @@ def analyze_channel(channel_name):
     elements.append(Paragraph("Daily and Monthly Performance Charts", styles['DarkNormal']))
     elements.append(Spacer(1, 20))
 
-    # Add the chart image to the PDF
-    img = Image(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart.png"), width=552, height=620)  # Full width (612 - 60 margins) and full height (792 - 72 margins)
-    elements.append(img)
+    # Add the chart images to the PDF
+    img1 = Image(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart_daily.png"), width=552, height=620)  # Full width (612 - 60 margins) and full height (792 - 72 margins)
+    img2 = Image(os.path.join(OUTPUT_DIR, f"{channel_name.lower().replace(' ', '_')}_chart_monthly.png"), width=552, height=620)  # Full width (612 - 60 margins) and full height (792 - 72 margins)
+    elements.append(img1)
+    elements.append(img2)
     elements.append(Spacer(1, 20))
 
     # Add page break before the actual chart image
@@ -645,7 +732,11 @@ def analyze_channel(channel_name):
     # Daily statistics
     elements.append(Paragraph("Daily Statistics", styles['CenteredHeading2']))
     daily_data = [['Date', 'Trades', 'Avg Profit %', 'Total Profit %', 'Profit/Loss ($)', 'Cumulative Profit ($)']]
-    for _, row in daily_stats.iterrows():
+    
+    # Calculate cumulative profit for daily stats
+    daily_stats_trading_days['Cumulative_Profit'] = daily_stats_trading_days['Total_Profit_Dollars'].cumsum()
+    
+    for _, row in daily_stats_trading_days.iterrows():
         daily_data.append([
             row['Day'],
             row['Trade_Count'],
